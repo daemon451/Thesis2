@@ -218,7 +218,7 @@ class droneGym(gym.Env):
         self.zSet = zSet
 
         reward_unlog = 1 - np.sqrt(self.distin3d(state[9], state[10], state[11], xSet, ySet, zSet))
-        reward = 10 * np.exp(reward_unlog)/(np.exp(reward_unlog) + 1)
+        reward = 20 * np.exp(reward_unlog)/(np.exp(reward_unlog) + 1)
         reward = round(reward)
         self.rewardList.append(reward)
 
