@@ -45,12 +45,16 @@ class droneGym(gym.Env):
         # self.action_space.n = 4
         self.action_space = spaces.Box(low=np.array((0)), high=np.array((1)))
         self.action_space.n = 1
+        # self.action_space = spaces.Box(low=np.array((0,0)), high=np.array((1,1)))
+        # self.action_space.n = 2
 
         # Example for using image as input:
         #current state matrix?
         self.x = self.stateMatrixInit()
         # self.observation_space = spaces.Box(low = -np.inf, high = np.inf, shape = self.x.shape)
-        self.observation_space = self.x
+        # self.observation_space = self.x
+        self.observation_space = spaces.Box(low=np.array((-100,-100,-100,0,0,0,0,0,0,-100,-100,-100,-100,-100,-100)), high=np.array((100,100,100,7,7,7,7,7,7,100,100,100,100,100,100)))
+
 
         self.rateLimitUp = 2
         self.rateLimitDown = 8
@@ -232,19 +236,20 @@ class droneGym(gym.Env):
         if self.t > 9.8 or pitch_bad or roll_bad or alt_bad:
             # reward = -200
             if self.t > 9.8:
-                reward = 200
+                reward = 400
                 self.rewardList.append(reward)
             else:
                 reward = -100
                 self.rewardList.append(reward)
             done = True
 
+            failer = ''
             if pitch_bad:
-                failer = "Pitch"
-            elif roll_bad:
-                failer = 'Roll'
-            else:
-                failer = "Alt"
+                failer += "Pitch"
+            if roll_bad:
+                failer += 'Roll'
+            if alt_bad:
+                failer += "Alt"
 
             with open(self.diagPath, 'a', newline = '') as csvFile:
                 writer = csv.writer(csvFile)

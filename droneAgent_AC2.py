@@ -2,20 +2,23 @@ import collections
 import gym
 import envs
 import numpy as np
+import plaidml.keras
+plaidml.keras.install_backend()
+
 import tensorflow as tf
 import tensorflow_probability as tfp
 import tqdm
 import keras
+from sklearn.preprocessing import StandardScaler
 
 from matplotlib import pyplot as plt
 from tensorflow.keras import layers
 from typing import Any, List, Sequence, Tuple
 
 
-
 # Create the environment
 env = gym.make('droneGym-v0')
-tf.get_logger().setLevel('INFO')
+tf.get_logger().setLevel('ERROR')
 #####https://colab.research.google.com/github/tensorflow/docs/blob/master/site/en/tutorials/reinforcement_learning/actor_critic.ipynb#scrollTo=qbIMMkfmRHyC
 #####https://medium.com/@asteinbach/actor-critic-using-deep-rl-continuous-mountain-car-in-tensorflow-4c1fb2110f7c
 
@@ -43,7 +46,7 @@ class ActorCritic(tf.keras.Model):
 
         critic = layers.Dense(1)(common2)
 
-        self.model = keras.Model(inputs=inputs, outputs=[action, actionProb, critic])
+        self.model = tf.keras.Model(inputs=inputs, outputs=[action, actionProb, critic])
 
     # def call(self, inputs: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
     #   x = self.common(inputs)
@@ -67,10 +70,22 @@ def tf_env_step(action: tf.Tensor) -> List[tf.Tensor]:
     return tf.numpy_function(env_step, [action],
                              [tf.float32, tf.int32, tf.int32])
 
+def setUpScaler():
+    state_space_samples = np.array(
+        [env.observation_space.sample() for x in range(10000)])
+    scaler = StandardScaler()
+    scaler.fit(state_space_samples)
+    return scaler
+
+def scaleState(scaler, state):
+    scaled = scaler.transform([state])
+    return scaled[0]
+
 def run_episode(
         initial_state: tf.Tensor,
         model: tf.keras.Model,
-        max_steps: int) -> List[tf.Tensor]:
+        max_steps: int,
+        scaler: object) -> List[tf.Tensor]:
     """Runs a single episode to collect training data."""
 
     action_probs = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
@@ -85,6 +100,7 @@ def run_episode(
 
     for t in tf.range(max_steps):
         # Convert state into a batched tensor (batch size = 1)
+        # state = scaleState(scaler, state)
         state = tf.expand_dims(state, 0)
         state = np.abs(state)
         state = tf.convert_to_tensor(state)
@@ -208,14 +224,15 @@ def train_step(
         model: tf.keras.Model,
         optimizer: tf.keras.optimizers.Optimizer,
         gamma: float,
-        max_steps_per_episode: int) -> tf.Tensor:
+        max_steps_per_episode: int,
+        scaler: object) -> tf.Tensor:
     """Runs a model training step."""
 
     with tf.GradientTape() as tape:
 
         # Run the model for one episode to collect training data
         action_probs, actions_taken, actions_mean, values, rewards = run_episode(
-            initial_state, model, max_steps_per_episode)
+            initial_state, model, max_steps_per_episode, scaler)
 
         # Calculate expected returns
         returns = get_expected_return(rewards, gamma)
@@ -252,6 +269,7 @@ if __name__ == "__main__":
     num_actions = env.action_space.n  # 2
     num_hidden_units = 128
     model = ActorCritic(num_actions, num_hidden_units)
+    scaler = setUpScaler()
     model.load_weights(r'C:\Users\Stephen\PycharmProjects\Thesis2\tempStuff\checkpointStarting')
 
     #set up plotter, hope it's dynamic
@@ -278,7 +296,7 @@ if __name__ == "__main__":
     with tqdm.trange(max_episodes) as t:
         for i in t:
             initial_state = tf.constant(env.reset(), dtype=tf.float32)
-            episode_reward, lent, loss = train_step(initial_state, model, optimizer, gamma, max_steps_per_episode)
+            episode_reward, lent, loss = train_step(initial_state, model, optimizer, gamma, max_steps_per_episode, scaler)
             episode_reward = int(episode_reward)
 
             running_reward = episode_reward*0.01 + running_reward*.99
