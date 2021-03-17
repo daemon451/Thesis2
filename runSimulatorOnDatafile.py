@@ -6,7 +6,7 @@ import os
 import matplotlib.pyplot as plt
 
 
-pat = r'C:\Users\Stephen\PycharmProjects\QuadcopterSim\visualizer\test\test1000.js'
+pat = r'C:\Users\Stephen\PycharmProjects\QuadcopterSim\visualizer\test\test0.js'
 times = []
 
 def translateJStoPython(pat):

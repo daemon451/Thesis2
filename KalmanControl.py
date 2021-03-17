@@ -6,4 +6,4 @@ class KalmanControl():
         self.x = np.zeros(4)
         self.F = np.zeros((4,4))
 
-        self.y = 
+        self.y = 1

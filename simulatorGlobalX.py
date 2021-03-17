@@ -387,6 +387,10 @@ if __name__ == "__main__":
             x_next[2] = np.min([x[2],x_next[2],0])
             x_next[11] = np.max([x[11],x_next[11],0])
 
+            x_next[3] = 0
+            x_next[4] = 0
+            x_next[5] = 0
+
         ds.memory(x_next)
         x = x_next
 

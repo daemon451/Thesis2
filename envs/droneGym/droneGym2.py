@@ -8,21 +8,17 @@ import time
 import csv
 from collections import deque
 import PIDcontrol
-from simulator import *
 
 # Physical Constants
-m = 1.07         #kg
-Ixx = 0.0093   #kg-m^2
-Iyy = 0.0093   #kg-m^2
-# Izz = 0.9*(Ixx + Iyy) #kg-m^2 (Assume nearly flat object, z=0)
-Izz = .0151
-Ir = .0066 #rotor moment of inertia
-dx = 0.214     #m
-# dy = 0.0825     #m
-dy = dx
-dragCoef = 4.406*10**-7 #kg*m^2*s^-1
+m = 0.1         #kg
+Ixx = 0.00062   #kg-m^2
+Iyy = 0.00113   #kg-m^2
+Izz = 0.9*(Ixx + Iyy) #kg-m^2 (Assume nearly flat object, z=0)
+dx = 0.114      #m
+dy = 0.0825     #m
 g = 9.81  #m/s/s
 DTR = 1/57.3; RTD = 57.3
+
 thrustCoef = 1.5108 * 10**-5 #kg*m
 
 
@@ -41,21 +37,30 @@ class droneGym(gym.Env):
         os.remove(self.diagPath) if os.path.exists(self.diagPath) else None
         with open(self.diagPath,'w',newline = '') as csvFile:
             writer = csv.writer(csvFile)
-            writer.writerow(['Time','Simulated Time','Failed on','Reward','Altitude (m)', 'Roll','Pitch','Yaw', 'X_distance','Y_distance'])
+            writer.writerow(['Time','Simulated Time','Failed on','Reward','Altitude (m)', 'Roll','Pitch','Yaw'])
 
         # Define action and observation space
         # They must be gym.spaces objects
-        self.action_space = spaces.Box(low = np.array((0,0,0)), high = np.array((1,1,1)))
-        self.action_space.n = 3
+        # Example when using discrete actions:
+        self.action_space = spaces.Box(low = np.array((0,0,0,0)), high = np.array((1,1,1,1)))
+        self.action_space.n = 4
+        # self.action_space = spaces.Box(low=np.array((0)), high=np.array((1)))
+        # self.action_space.n = 1
+        # self.action_space = spaces.Box(low=np.array((0,0)), high=np.array((1,1)))
+        # self.action_space.n = 2
 
+        # Example for using image as input:
+        #current state matrix?
         self.x = self.stateMatrixInit()
-
+        # self.observation_space = spaces.Box(low = -np.inf, high = np.inf, shape = self.x.shape)
+        # self.observation_space = self.x
         self.observation_space = spaces.Box(low=np.array((-100,-100,-100,0,0,0,0,0,0,-100,-100,-100,-100,-100,-100)), high=np.array((100,100,100,7,7,7,7,7,7,100,100,100,100,100,100)))
 
 
         self.rateLimitUp = 2
         self.rateLimitDown = 8
 
+        #self.observation_space = spaces.Box(low=0, high=255, shape= (HEIGHT, WIDTH, N_CHANNELS), dtype=np.uint8)
         self.reward_range = np.array((-np.inf,1))
 
         self.times = [self.t]
@@ -81,16 +86,14 @@ class droneGym(gym.Env):
 
         self.rewardList = []
 
-        self.altController =  PIDcontrol.PIDControl('Alt', Kp =50, Ki = 6, Kd = 28, timeStep = self.dt, open = False)
-        self.rollController = PIDcontrol.PIDControl('Roll', Kp=2, Ki=.1, Kd=0, timeStep=self.dt, open=False)
-        self.pitchController = PIDcontrol.PIDControl('Pitch', Kp=2, Ki=.1, Kd=0, timeStep=self.dt, open=False)
-        self.yawController = PIDcontrol.PIDControl('Yaw', Kp=600, Ki=0, Kd=0, timeStep=self.dt, open=False)
-        self.zSet = 10
-        self.temp = []
+        self.altControl = PIDcontrol.PIDControl('Alt', Kp =.1, Ki = .01, Kd = 0, timeStep = self.dt, open = False)
+        self.xControl = PIDcontrol.PIDControl('X', Kp = .015, Ki = 0, Kd = 0, timeStep = self.dt, open = False)
+        self.yControl = PIDcontrol.PIDControl('Y', Kp = .015, Ki = 0, Kd = 0, timeStep = self.dt, open = False)
+
 
     def checkActionStepSize(self, action):
         #limit step-to-step action size (imitating motor inertia)
-        limitedActions = np.zeros(3)
+        limitedActions = np.zeros(4)
         for i,n in enumerate(action):
             diff = n - self.prevU[i]
             if diff > self.rateLimitUp:
@@ -103,64 +106,42 @@ class droneGym(gym.Env):
         self.prevU = limitedActions
         return limitedActions
 
-    def createUs(self, state, action):
-        errs = np.zeros(4)
-        errs[0] = action[0] - state[11]
-        errs[1] = action[1] - state[6]
-        errs[2] = action[2] - state[7]
-        errs[3] = 0 - state[8]
-
-        u = np.zeros(4)
-        bsZerr = self.zSet - state[11]
-        u[0] = self.altController.updateControl(bsZerr)
-        u[1] = self.rollController.updateControl(errs[1])
-        u[2] = self.pitchController.updateControl(errs[2])
-        u[3] = self.yawController.updateControl(errs[3])
-
-        return u
-
     def step(self, action):
         # Execute one time step within the environment
-
-        maxAngleAllowed = .6457718 #around 37 degrees
-        if len(action) < 3:
-            newAct = np.zeros(3)
+        # if np.isnan(action[0][0]):
+        #     print('nan somehow')
+        # if len(action[0]<4):
+        if len(action < 4):
+            newAct = np.zeros(4)
             for i,n in enumerate(action):
-                newAct[i] = 1/(1+ np.exp(-n))
+                newAct[i] = n
             action = newAct
 
         # action[0] = (action[0]/200 + .5) * 100
-        # action[0] = (action[0] -.5)*10 #Z velocity estimate?
-        action[0] = (action[0]) * 50 #Z position Target?
-        action[1:] = [(i-.5)*maxAngleAllowed for i in action[1:]]
+        action[0] = action[0] * 100
+        action[1:] = [(i-.5)*100 for i in action[1:]]
 
-        # action = self.checkActionStepSize(action)
+        action = self.checkActionStepSize(action)
 
         if np.isnan(action[0]):
             print('tt')
 
-        uActions = self.createUs(self.x, action)
-
-        x_next = self.numericalIntegration(self.x,uActions,self.dt)
+        x_next = self.numericalIntegration(self.x,action,self.dt)
         self.t += self.dt
 
-        if x_next[11] < .05:
+        if self.t < 1 and x_next[11] < .05:
             x_next[2] = np.min([self.x[2],x_next[2],0])
             x_next[11] = np.max([self.x[11],x_next[11],0])
 
-            x_next[3] = 0
-            x_next[4] = 0
-            x_next[5] = 0
-
         reward, done = self.calcReward(self.x)
 
-        x_next[14] = x_next[11] - self.zSet
+        x_next[12] = x_next[11] - self.zSet
         x_next[13] = x_next[10] - self.ySet
-        x_next[12] = x_next[9] - self.xSet
+        x_next[14] = x_next[9] - self.xSet
 
 
         self.x = x_next
-        self.memory(self.x, uActions)
+        self.memory(self.x, action)
 
         return self.x, reward, done, {}
 
@@ -169,6 +150,8 @@ class droneGym(gym.Env):
         # Reset the state of the environment to an initial state
         self.t = 0
         self.x = self.stateMatrixInit()
+        # self.x[2] = -.049
+        # self.x[11] = .049
 
         self.times = [self.t]
         self.xdot_b = []#latitudinal velocity body frame
@@ -193,17 +176,9 @@ class droneGym(gym.Env):
 
         self.rewardList = []
 
-        self.altController =  PIDcontrol.PIDControl('Alt', Kp =50, Ki = 6, Kd = 28, timeStep = self.dt, open = False)
-        self.rollController = PIDcontrol.PIDControl('Roll', Kp=2, Ki=.1, Kd=0, timeStep=self.dt, open=False)
-        self.pitchController = PIDcontrol.PIDControl('Pitch', Kp=2, Ki=.1, Kd=0, timeStep=self.dt, open=False)
-        self.yawController = PIDcontrol.PIDControl('Yaw', Kp=600, Ki=0, Kd=.1, timeStep=self.dt, open=False)
-        self.temp = []
-
-        posNegMult =np.sign(np.random.randint(0,2) -.1)
-        self.xSetRandom = np.random.uniform(.5,1)*10*posNegMult
-        self.ySetRandom = np.random.uniform(.5,1)*10*posNegMult
-
-        self.prevDist = np.sqrt(self.xSetRandom**2 + self.ySetRandom**2)
+        self.altControl = PIDcontrol.PIDControl('Alt', Kp =.1, Ki = .01, Kd = 0, timeStep = self.dt, open = False)
+        self.xControl = PIDcontrol.PIDControl('X', Kp = .015, Ki = 0, Kd = 0, timeStep = self.dt, open = False)
+        self.yControl = PIDcontrol.PIDControl('Y', Kp = .015, Ki = 0, Kd = 0, timeStep = self.dt, open = False)
 
         return self.x
 
@@ -214,9 +189,6 @@ class droneGym(gym.Env):
         df = pd.DataFrame(list(zip(self.times, self.xdot_b, self.ydot_b, self.zdot_b, self.p, self.q, self.r, self.phi, self.theta, self.psi, self.xpos, self.y, self.z)),
                           columns=['t', 'xdot_b', 'ydot_b', 'zdot_b', 'p', 'q', 'r', 'phi', 'theta', 'psi', 'x', 'y',
                                    'z'])
-        self.u1 = np.zeros(len(self.u1)) + 1
-        self.u4 = np.zeros(len(self.u4)) + 1
-
 
         dfAction = pd.DataFrame(list(zip(self.u1, self.u2, self.u3, self.u4)), columns = ['U1','U2','U3','U4'])
         with open(r'C:\Users\Stephen\PycharmProjects\QuadcopterSim\visualizer\test\\' + newfileName + '.js', 'w') as outfile:
@@ -240,47 +212,47 @@ class droneGym(gym.Env):
         #calculate reward based off of distance from setpoints
         done = False
 
-        # if self.t < 5:
-        xSet = self.xSetRandom
-        ySet = self.ySetRandom
-        zSet = 10
-        # else:# self.t >= 5 and self.t<10:
-        #     xSet = -self.ySetRandom
-        #     ySet = -self.xSetRandom
-        #     zSet = 10
-        # elif self.t >= 10 and self.t < 15:
-        #     xSet = -5
-        #     ySet = 5
-        #     zSet = 12
-        # else:
-        # xSet = 0
-        # ySet = 0
-        # zSet = 10
+        if self.t < 5:
+            xSet = 0
+            ySet = 0
+            zSet = 10
+        elif self.t >= 5 and self.t<10:
+            xSet = 5
+            ySet = 5
+            zSet = 10
+        elif self.t >= 10 and self.t < 15:
+            xSet = -5
+            ySet = 5
+            zSet = 12
+        else:
+            xSet = 0
+            ySet = 0
+            zSet = 2
 
         self.xSet = xSet
         self.ySet = ySet
         self.zSet = zSet
 
         zErr, xErr, yErr = self.calculateError(state, [zSet, xSet, ySet])
-        # desiredZvel = -self.altControl.updateControl(zErr)
-        # desiredXvel = self.xControl.updateControl(xErr)
-        # desiredYvel = self.yControl.updateControl(yErr)
-        phiRef, thetaRef = self.globalNeededThrust(state, xErr, yErr)
-        # totRefs = [0, 0, 0, phiRef, thetaRef, 0]
-        # totRefs = [0, 0, 0, 0, 0, 0]
-        totRefs = [phiRef, thetaRef, 0]
+        desiredZvel = -self.altControl.updateControl(zErr)
+        desiredXvel = self.xControl.updateControl(xErr)
+        desiredYvel = self.yControl.updateControl(yErr)
+        phiRef, thetaRef = self.globalNeededThrust(state, desiredXvel, desiredYvel)
+        totRefs = [desiredZvel, phiRef, thetaRef, 0]
 
-
-
-        # reward_unlog = 2.23606797749979 - np.sqrt(self.distin3d(state[9], state[10], state[11], xSet, ySet, zSet)) #sqrt of 0,0,5 position
-        # reward = 10 * (np.exp(reward_unlog)/(np.exp(reward_unlog) + 1) - .5)
-        dist = self.distin3d(state[9], state[10], state[11], xSet, ySet, zSet)  # sqrt of 0,0,5 position
-        dist2d = self.distin3d(state[9], state[10], zSet, xSet, ySet, zSet)
+        reward_unlog = 1 - np.sqrt(self.distin3d(state[9], state[10], state[11], xSet, ySet, zSet))
+        # reward = 20 * np.exp(reward_unlog)/(np.exp(reward_unlog) + 1) - 100
         # reward = round(reward)
-        # reward = -np.clip(np.sum(np.abs([(state[n]-totRefs[i]) for i,n in enumerate([6,7,8])])),0,1)
-        reward = -1 + 10*(self.prevDist-dist2d)#/(np.sqrt(self.xSet**2 + self.ySet**2))
 
-        self.prevDist = dist2d
+        temp = (state[2]-totRefs[0])/10
+        reward = -np.clip(np.sum(np.abs([(state[n]-totRefs[i])/8 if n !=2 else (state[n]-totRefs[i])/10 for i,n in enumerate([2,3,4,5])])),0,3)
+
+
+        # if zErr < -1:
+        #     print(str(state[2]) + ":" + str(state[11]))
+
+        self.rewardList.append(reward)
+
         maxAngleAllowed = 1#0.5745329
         # pitch_bad = not(-maxAngleAllowed < state[6] < maxAngleAllowed) and self.t > .4
         # roll_bad = not(-maxAngleAllowed < state[7] < maxAngleAllowed) and self.t > .4
@@ -288,18 +260,15 @@ class droneGym(gym.Env):
         pitch_bad = ((2*np.pi)-maxAngleAllowed) > state[7] > maxAngleAllowed and self.t > .4
         alt_bad = not(.05 < state[11] < 100) and self.t > 1
 
-        self.rewardList.append(reward)
-        goodDist = 3 #in m
-
-        if self.t > 12 or pitch_bad or roll_bad or alt_bad or dist<goodDist:
-            # if self.t > 9.8:
-            #     # reward = 400
-            #     reward = 1
-            #     self.rewardList.append(reward)
-            # else:
-            #     # reward = -200
-            #     reward = -10
-            #     self.rewardList.append(reward)
+        if self.t > 9.8 or pitch_bad or roll_bad or alt_bad:
+            if self.t > 9.8:
+                # reward = 400
+                reward = 20
+                self.rewardList.append(reward)
+            else:
+                # reward = -200
+                reward = -10
+                self.rewardList.append(reward)
             done = True
 
             failer = ''
@@ -309,17 +278,11 @@ class droneGym(gym.Env):
                 failer += 'Roll'
             if alt_bad:
                 failer += "Alt"
-            if dist<goodDist:
-                failer += "Dist"
-                reward = 80
-
 
             with open(self.diagPath, 'a', newline = '') as csvFile:
                 writer = csv.writer(csvFile)
                 totReward = np.sum(self.rewardList)
-                writer.writerow([round(time.time()-self.startTime,1), round(self.t,2), failer, round(totReward/self.t,3),
-                                 round(state[11],3),round(state[6],3),round(state[7],3),round(state[8],3), np.ceil(state[12]), np.ceil(state[13])])
-
+                writer.writerow([round(time.time()-self.startTime,1), round(self.t,2), failer, round(totReward,3), round(state[11],3),round(state[6],3),round(state[7],3),round(state[8],3)])
 
 
         return reward, done
@@ -347,7 +310,7 @@ class droneGym(gym.Env):
         self.u1.append(action[0])
         self.u2.append(action[1])
         self.u3.append(action[2])
-        self.u4.append(0)
+        self.u4.append(action[3])
 
     def stateMatrixInit(self):
         x = np.zeros(15)
@@ -374,7 +337,7 @@ class droneGym(gym.Env):
         w_o = np.zeros(4)
         thrustForce = np.zeros(4)
 
-        modifyDef = 100000   #initial Val = 10000000
+        modifyDef = 150000   #initial Val = 10000000
         lesDef = .013385701848569465 * modifyDef
 
         for i,n in enumerate(u):
@@ -416,7 +379,9 @@ class droneGym(gym.Env):
         # F3 = u#Fthrust(x, u[2], dx, -dy)
         # F4 = u#Fthrust(x, u[3], -dx, dy)
         Fz = F1 + F2 + F3 + F4
-        self.temp.append(Fz)
+        # L = (F1 + F4) * dy - (F2 + F3) * dy
+        # M = (F1 + F3) * dx - (F2 + F4) * dx
+        # N = 0  # -T(F1, dx, dy) - T(F2, dx, dy) + T(F3, dx, dy) + T(F4, dx, dy)
 
         L = dy * (F4 - F2)
         M = dx * (F1 - F3)
@@ -485,6 +450,9 @@ class droneGym(gym.Env):
         cpsi = np.cos(psi)
         spsi = np.sin(psi)
 
+        # u_x = ((spsi*sphi) + (cpsi*cphi*sthe)) / (cthe*cpsi)
+        # u_y = (-(cpsi*sphi) + (cpsi*cphi*sthe)) / (cthe*cpsi)
+
         maxAngleAllowed = 0.2745329 #10 degrees, actual max angle is ~36.86
         Kmax = np.sin(maxAngleAllowed)**2 / (1 - np.sin(maxAngleAllowed)**2)
 
@@ -505,6 +473,7 @@ class droneGym(gym.Env):
         return phiRef, thetaRef
 
     def calculateError(self, x, setpoints):
+        # store current errors?
         # setpoints = [alt, roll, pitch, yaw]
         altError = setpoints[0] - x[11]
         xError = setpoints[1] - x[9]

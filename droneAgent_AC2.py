@@ -17,7 +17,7 @@ from typing import Any, List, Sequence, Tuple
 
 
 # Create the environment
-env = gym.make('droneGym-v0')
+
 tf.get_logger().setLevel('ERROR')
 #####https://colab.research.google.com/github/tensorflow/docs/blob/master/site/en/tutorials/reinforcement_learning/actor_critic.ipynb#scrollTo=qbIMMkfmRHyC
 #####https://medium.com/@asteinbach/actor-critic-using-deep-rl-continuous-mountain-car-in-tensorflow-4c1fb2110f7c
@@ -31,11 +31,6 @@ class ActorCritic(tf.keras.Model):
     def __init__(self,num_actions: int,num_hidden_units: int):
         """Initialize."""
         super().__init__()
-
-        # self.common = layers.Dense(num_hidden_units, activation="relu")
-        # self.common = layers.Dense(num_hidden_units, activation="relu")
-        # self.actor = layers.Dense(num_actions, activation = "sigmoid")
-        # self.critic = layers.Dense(1)
 
         inputs = layers.Input(shape=15)
         common = layers.Dense(num_hidden_units, activation="tanh")(inputs)
@@ -58,19 +53,19 @@ class ActorCritic(tf.keras.Model):
 
 
 
-def env_step(action: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def env_step(action: np.ndarray, env: object) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Returns state, reward and done flag given an action."""
-    state, reward, done, _ = env.step(action)
+    state, reward, done, _ = env[0].step(action[0])
     return (state.astype(np.float32),
-            np.array(reward, np.int32),
+            np.array(reward, np.float32),
             np.array(done, np.int32))
 
 
-def tf_env_step(action: tf.Tensor) -> List[tf.Tensor]:
-    return tf.numpy_function(env_step, [action],
-                             [tf.float32, tf.int32, tf.int32])
+def tf_env_step(action: tf.Tensor, env:object) -> List[tf.Tensor]:
+    return tf.numpy_function(env_step, [action, [env]],
+                             [tf.float32, np.float32, tf.int32])
 
-def setUpScaler():
+def setUpScaler(env):
     state_space_samples = np.array(
         [env.observation_space.sample() for x in range(10000)])
     scaler = StandardScaler()
@@ -85,12 +80,13 @@ def run_episode(
         initial_state: tf.Tensor,
         model: tf.keras.Model,
         max_steps: int,
-        scaler: object) -> List[tf.Tensor]:
+        scaler: object,
+        env:object) -> List[tf.Tensor]:
     """Runs a single episode to collect training data."""
 
     action_probs = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
     values = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
-    rewards = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
+    rewards = tf.TensorArray(dtype=np.float32, size=0, dynamic_size=True)
     actions_taken = tf.TensorArray(dtype = tf.float32, size = 0, dynamic_size=True)
     actions_mean = tf.TensorArray(dtype = tf.float32, size = 0, dynamic_size=True)
 
@@ -100,9 +96,9 @@ def run_episode(
 
     for t in tf.range(max_steps):
         # Convert state into a batched tensor (batch size = 1)
-        # state = scaleState(scaler, state)
+        state = scaleState(scaler, state)
         state = tf.expand_dims(state, 0)
-        state = np.abs(state)
+        # state = np.abs(state)
         state = tf.convert_to_tensor(state)
         if np.sum(np.isnan(state)):
             print("states gone NaN somehow")
@@ -126,7 +122,8 @@ def run_episode(
         # if np.random.random() > .9:
         #   action = tf.constant([[env.action_space.sample()]])
         action_probs_t = norm_dist.prob(action_logits_t)
-        action = 200 * (action_logits_t - .5)
+        action = action_logits_t
+        # action = 200 * (action_logits_t - .5)
 
 
         # Store critic values
@@ -135,12 +132,12 @@ def run_episode(
         # Store log probability of the action chosen
         # action_probs = action_probs.write(t, action_probs_t[0, action])
         # action_probs = action_probs.write(t, action_probs_t[0,0])
-        action_probs = action_probs.write(t, action_prob[0,0])
-        actions_mean = actions_mean.write(t, action_mean[0,0])
-        actions_taken = actions_taken.write(t,action_logits_t[0,0])
+        action_probs = action_probs.write(t, action_prob[0])
+        actions_mean = actions_mean.write(t, action_mean[0])
+        actions_taken = actions_taken.write(t,action_logits_t[0])
 
         # Apply action to the environment to get next state and reward
-        state, reward, done = tf_env_step(action)
+        state, reward, done = tf_env_step(action, env)
         state.set_shape(initial_state_shape)
 
         # Store reward
@@ -197,8 +194,8 @@ def compute_loss(
     action_log_probs = tf.math.log(action_probs + 1*10**-5)
     actor_loss = -tf.math.reduce_sum(action_log_probs * advantage)
 
-    critic_loss = huber_loss(returns,values)
-    critic_loss_temp = tf.math.reduce_mean(np.power(advantage,2))
+    # critic_loss = huber_loss(returns,values)
+    critic_loss = tf.math.reduce_mean(np.power(advantage,2))
 
     return actor_loss + critic_loss
 
@@ -216,7 +213,30 @@ def compute_loss2(
 
     return tf.math.reduce_sum(loss)
 
+def compute_loss3(
+        action_probs: tf.Tensor,
+        actions_taken: tf.Tensor,
+        actions_mean: tf.Tensor,
+        values: tf.Tensor,
+        returns: tf.Tensor) -> tf.Tensor:
+    """Computes the combined actor-critic loss."""
 
+    advantage = returns - values
+    critic_loss = advantage ** 2
+
+    normalCurves = tfp.distributions.Normal(actions_mean, action_probs)
+    probabilityPerActions = normalCurves.prob(actions_taken)
+    policy = tf.nn.softmax(probabilityPerActions)
+    entropy = tf.reduce_sum(policy * tf.math.log(policy + 1e-20), axis=1)
+
+    policy_loss = tf.nn.softmax_cross_entropy_with_logits(labels=actions_taken,
+                                                             logits=probabilityPerActions)
+    policy_loss *= tf.stop_gradient(advantage)
+    policy_loss -= 0.01 * entropy
+    total_loss = tf.reduce_mean((0.5 * critic_loss + policy_loss))
+
+
+    return total_loss
 
 # @tf.function
 def train_step(
@@ -225,19 +245,18 @@ def train_step(
         optimizer: tf.keras.optimizers.Optimizer,
         gamma: float,
         max_steps_per_episode: int,
-        scaler: object) -> tf.Tensor:
+        scaler: object,
+        env: object) -> tf.Tensor:
     """Runs a model training step."""
 
     with tf.GradientTape() as tape:
 
         # Run the model for one episode to collect training data
         action_probs, actions_taken, actions_mean, values, rewards = run_episode(
-            initial_state, model, max_steps_per_episode, scaler)
+            initial_state, model, max_steps_per_episode, scaler, env)
 
         # Calculate expected returns
         returns = get_expected_return(rewards, gamma)
-        #########TEMPORARY MAYBE
-        # returns = tf.cast(rewards, dtype = tf.float32)
 
         # Convert training data to appropriate TF tensor shapes
         action_probs, actions_taken, actions_mean, values, returns = [
@@ -245,7 +264,9 @@ def train_step(
 
         # Calculating loss values to update our network
         # loss = compute_loss(action_probs, values, returns)
-        loss = compute_loss2(action_probs, actions_taken, actions_mean, values, returns)
+        # loss = compute_loss2(action_probs, actions_taken, actions_mean, values, returns)
+        loss = compute_loss3(action_probs, actions_taken, actions_mean, values, returns)
+
 
         if np.isnan(loss):
             print("Loss is NAN")
@@ -264,13 +285,14 @@ def train_step(
 
 if __name__ == "__main__":
 
+    env = gym.make('droneGym-v0')
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.000005, clipvalue=1)
     huber_loss = tf.keras.losses.Huber(reduction=tf.keras.losses.Reduction.SUM)
     num_actions = env.action_space.n  # 2
     num_hidden_units = 128
     model = ActorCritic(num_actions, num_hidden_units)
-    scaler = setUpScaler()
-    model.load_weights(r'C:\Users\Stephen\PycharmProjects\Thesis2\tempStuff\checkpointStarting')
+    scaler = setUpScaler(env)
+    # model.load_weights(r'C:\Users\Stephen\PycharmProjects\Thesis2\tempStuff\checkpointStarting')
 
     #set up plotter, hope it's dynamic
     plt.ion()
@@ -296,7 +318,7 @@ if __name__ == "__main__":
     with tqdm.trange(max_episodes) as t:
         for i in t:
             initial_state = tf.constant(env.reset(), dtype=tf.float32)
-            episode_reward, lent, loss = train_step(initial_state, model, optimizer, gamma, max_steps_per_episode, scaler)
+            episode_reward, lent, loss = train_step(initial_state, model, optimizer, gamma, max_steps_per_episode, scaler, env)
             episode_reward = int(episode_reward)
 
             running_reward = episode_reward*0.01 + running_reward*.99
@@ -314,9 +336,6 @@ if __name__ == "__main__":
             ax1.autoscale_view()
             ax2.relim()
             ax2.autoscale_view()
-            # ax.plot(range(0,i+1), running_reward,'b.', label = 'Reward')
-            # ax.plot(range(0,i+1), running_loss,'y.', label = 'Loss')
-            # ax.legend()
             plt.draw()
             fig.canvas.flush_events()
 
@@ -327,7 +346,5 @@ if __name__ == "__main__":
             if running_reward > reward_threshold:
                 break
 
-            if episode_reward > 1500 or lent > 800:
-                env.render(epNum=i)
 
     print(f'\nSolved at episode {i}: average reward: {running_reward:.2f}!')
